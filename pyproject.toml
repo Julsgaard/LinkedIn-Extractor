@@ -1,7 +1,7 @@
 [project]
 name = "linkedin-extractor"
-version = "0.1.0"
-description = "A LinkedIn data extraction toolkit for scraping skills, experience, and more."
+version = "0.1.1"
+description = "A LinkedIn data extraction toolkit for scraping skills, experience and more."
 readme = "README.md"
 authors = [{ name = "Kristian Julsgaard" }]
 license = { text = "MIT" }
@@ -13,8 +13,11 @@ dependencies = [
   "webdriver-manager>=3.8.0"
 ]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.py-modules]
+py-modules = ["linkedin_extractor"]
 
 [project.scripts]
 linkedin-extractor = "linkedin_extractor:main"
