@@ -1,5 +1,5 @@
 """
-LinkedIn Skill Scraper
+LinkedIn Extractor
 Scrapes skills from a LinkedIn profile's skills page.
 """
 
@@ -28,14 +28,14 @@ class LinkedInExtractor:
     def __init__(self, headless=False, debug=False):
         """
         Initialize the LinkedIn skill scraper.
-        
+
         Args:
             headless (bool): Run browser in headless mode (no GUI)
             debug (bool): Enable debug logging
         """
         self.driver = None
         self.headless = headless
-        
+
         if debug:
             logger.setLevel(logging.DEBUG)
 
@@ -43,20 +43,23 @@ class LinkedInExtractor:
         """Setup Chrome WebDriver with appropriate options."""
         logger.info("Setting up Chrome WebDriver...")
         chrome_options = Options()
-        
+
         if self.headless:
             chrome_options.add_argument('--headless')
             logger.info("Running in headless mode")
 
+        # Essential options for Docker/headless environments
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
+        chrome_options.add_argument('--disable-gpu')
+        chrome_options.add_argument('--disable-software-rasterizer')
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
-        
+
         # Add user agent to avoid detection
         chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36')
-        
+
         # Fix ChromeDriver path issue
         driver_path = ChromeDriverManager().install()
 
@@ -74,7 +77,7 @@ class LinkedInExtractor:
     def login(self, email, password):
         """
         Login to LinkedIn.
-        
+
         Args:
             email (str): LinkedIn email
             password (str): LinkedIn password
@@ -84,30 +87,32 @@ class LinkedInExtractor:
         """
         logger.info("Logging in to LinkedIn...")
         self.driver.get('https://www.linkedin.com/login')
-        
+
         try:
             # Wait for login form
             email_field = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.ID, 'username'))
             )
             password_field = self.driver.find_element(By.ID, 'password')
-            
+
             # Enter credentials
             email_field.send_keys(email)
             password_field.send_keys(password)
-            
+
             # Click login button
             login_button = self.driver.find_element(By.CSS_SELECTOR, 'button[type="submit"]')
             login_button.click()
-            
-            # Wait for login to complete
-            time.sleep(5)
+
+            # Wait for login to complete by checking for feed or profile
+            WebDriverWait(self.driver, 10).until(
+                lambda driver: 'feed' in driver.current_url or 'mynetwork' in driver.current_url or driver.find_elements(By.CSS_SELECTOR, '[data-control-name="identity_welcome_message"]')
+            )
             logger.info("Login successful!")
 
         except Exception as e:
             logger.error(f"Login failed: {e}")
             raise
-    
+
     def _count_skill_elements(self):
         """Count the current number of skill elements on the page."""
         try:
@@ -116,7 +121,7 @@ class LinkedInExtractor:
         except:
             return 0
 
-    def _wait_for_skills_to_load(self, timeout=60, check_interval=2):
+    def _wait_for_skills_to_load(self, timeout=30, check_interval=1):
         """
         Wait for skills to load by monitoring when the count increases.
 
@@ -142,8 +147,8 @@ class LinkedInExtractor:
             else:
                 stable_count += 1
 
-            # If count hasn't changed for 3 checks, we're probably done
-            if stable_count >= 3 and current_count > 0:
+            # If count hasn't changed for 2 checks, we're probably done (reduced from 3)
+            if stable_count >= 2 and current_count > 0:
                 logger.info(f"Skills stable at {current_count}, continuing...")
                 return current_count
 
@@ -155,7 +160,7 @@ class LinkedInExtractor:
     def scrape_skills(self, profile_url, save_html=False):
         """
         Scrape skills from a LinkedIn profile.
-        
+
         Args:
             profile_url (str): LinkedIn profile URL or username
             save_html (bool): Whether to save the HTML for debugging
@@ -173,25 +178,21 @@ class LinkedInExtractor:
             # Remove trailing slash and add skills path
             profile_url = profile_url.rstrip('/')
             skills_url = f'{profile_url}/details/skills/'
-        
+
         logger.info(f"Navigating to: {skills_url}")
         self.driver.get(skills_url)
-        
-        # Wait for initial page load
-        logger.info("Waiting for initial page load...")
-        time.sleep(3)
 
-        # Wait for skill components to be present and loaded
+        # Wait for skill components to be present (removed redundant time.sleep)
         try:
-            WebDriverWait(self.driver, 20).until(
+            WebDriverWait(self.driver, 15).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, '[id*="profilePagedListComponent"]'))
             )
             logger.info("Skill components detected!")
         except Exception as e:
             logger.warning(f"Timeout waiting for skills to appear: {e}")
 
-        # Wait dynamically for skills to fully load
-        initial_count = self._wait_for_skills_to_load(timeout=30, check_interval=2)
+        # Wait dynamically for skills to fully load (reduced timeout and interval)
+        initial_count = self._wait_for_skills_to_load(timeout=20, check_interval=1)
 
         if initial_count == 0:
             logger.warning("No skills detected yet. Trying to scroll anyway...")
@@ -210,11 +211,11 @@ class LinkedInExtractor:
             logger.info(f"Saved page HTML to {html_file} for debugging")
 
         soup = BeautifulSoup(page_source, 'html.parser')
-        
+
         skills = self._extract_skills_from_html(soup)
-        
+
         return skills
-    
+
     def _scroll_page(self):
         """Scroll the page to trigger lazy loading of all skills."""
         logger.info("Scrolling to load all skills...")
@@ -229,8 +230,8 @@ class LinkedInExtractor:
             scroll_count += 1
             logger.debug(f"Scroll {scroll_count}...")
 
-            # Wait a moment for content to load
-            time.sleep(2)
+            # Wait a moment for content to load (reduced from 2 to 1 second)
+            time.sleep(1)
 
             # Check if new skills loaded
             new_count = self._count_skill_elements()
@@ -244,23 +245,23 @@ class LinkedInExtractor:
                 stable_scrolls += 1
 
             # Safety limit to prevent infinite scrolling
-            if scroll_count >= 20:
+            if scroll_count >= 15:  # Reduced from 20
                 logger.warning("Reached maximum scroll limit")
                 break
 
         logger.info(f"Finished scrolling ({scroll_count} scrolls, {last_count} total skills)")
 
-        # One final wait to ensure everything is rendered
+        # One final wait to ensure everything is rendered (reduced from 3 to 1 second)
         logger.debug("Final wait for rendering...")
-        time.sleep(3)
+        time.sleep(1)
 
     def _extract_skills_from_html(self, soup):
         """
         Extract skill names from the HTML.
-        
+
         Args:
             soup (BeautifulSoup): Parsed HTML
-            
+
         Returns:
             list: List of skill names
         """
@@ -269,21 +270,21 @@ class LinkedInExtractor:
 
         # Find all profilePagedListComponent elements
         paged_list_components = soup.find_all('li', id=lambda x: x and 'profilePagedListComponent' in x)
-        
+
         logger.info(f"Found {len(paged_list_components)} profilePagedListComponent elements")
 
         for idx, component in enumerate(paged_list_components):
             # Try multiple strategies to find the skill name
             skill_name = None
-            
+
             # Strategy 1: Look for all span elements with aria-hidden="true"
             # The skill name is usually in the first non-empty one
             skill_spans = component.find_all('span', {'aria-hidden': 'true'})
 
             for span in skill_spans:
                 text = span.get_text(strip=True)
-                # Get clean text - skill names are typically short
-                if text and 2 <= len(text) <= 100:
+                # Get clean text - skill names can be 1-100 characters (changed from 2 to support "C", "R", etc.)
+                if text and 1 <= len(text) <= 100:
                     # Skip metadata patterns
                     if (not text.isdigit() and
                         not text.startswith('(') and
@@ -299,8 +300,8 @@ class LinkedInExtractor:
                 all_text_elements = component.find_all(['span', 'div'])
                 for elem in all_text_elements:
                     text = elem.get_text(strip=True)
-                    # Only direct text, not nested
-                    if text and len(list(elem.children)) <= 2 and 2 <= len(text) <= 100:
+                    # Only direct text, not nested (changed from 2 to 1 to support single-char skills)
+                    if text and len(list(elem.children)) <= 2 and 1 <= len(text) <= 100:
                         if (not text.isdigit() and
                             not text.startswith('(') and
                             'endorsement' not in text.lower()):
