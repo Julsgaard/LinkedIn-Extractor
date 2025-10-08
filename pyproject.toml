@@ -1,6 +1,6 @@
 [project]
 name = "linkedin-extractor"
-version = "0.1.4"
+version = "0.1.5"
 description = "A LinkedIn data extraction toolkit for scraping skills, experience and more."
 readme = "README_PYPI.md"
 authors = [{ name = "Kristian Julsgaard" }]
