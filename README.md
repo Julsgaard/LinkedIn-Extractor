@@ -1,8 +1,8 @@
-# LinkedIn Skill Scraper
+# LinkedIn Extractor
 
-A Python-based tool to scrape skills from LinkedIn profile skills pages using dynamic content loading detection. The scraper intelligently waits for content to load rather than using fixed delays, making it faster and more reliable.
+A Python-based tool to extract skills from LinkedIn profile pages using dynamic content loading detection. The scraper intelligently waits for content to load rather than using fixed delays, making it faster and more reliable.
 
-[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Features
@@ -13,28 +13,33 @@ A Python-based tool to scrape skills from LinkedIn profile skills pages using dy
 - 🛠️ **CLI & Programmatic API** - Use as command-line tool or import as library
 - 💾 **Flexible Output** - Save to text files or use in your code
 - 🔒 **Secure** - No hardcoded credentials, supports environment variables
-- 📄 **HTML Parsing** - Can parse saved HTML files without logging in
 
 ## Installation
 
-### Option 1: Clone Repository (Recommended for GitHub)
-
-```bash
-git clone https://github.com/yourusername/linkedin-skill-scraper.git
-cd linkedin-skill-scraper
-pip install -r requirements.txt
-```
-
-### Option 2: Install as Package
+### Option 1: Install as Package (Recommended)
 
 ```bash
 pip install -e .
 ```
 
-This allows you to import the package from anywhere:
+This installs the package and provides a CLI command:
+
+```bash
+linkedin-extractor --help
+```
+
+You can also import the package from anywhere:
 
 ```python
-from linkedin_skill_scraper import LinkedInSkillScraper
+from linkedin_extractor import LinkedInExtractor
+```
+
+### Option 2: Clone and Install Dependencies
+
+```bash
+git clone https://github.com/yourusername/linkedin-extractor.git
+cd linkedin-extractor
+pip install -r requirements.txt
 ```
 
 ## Usage
@@ -46,13 +51,19 @@ from linkedin_skill_scraper import LinkedInSkillScraper
 Simply run without arguments for interactive prompts:
 
 ```bash
-python linkedin_skill_scraper.py
+linkedin-extractor
+```
+
+Or if running from source:
+
+```bash
+python src/linkedin_extractor.py
 ```
 
 #### Command Line Arguments
 
 ```bash
-python linkedin_skill_scraper.py <profile> --email <email> --password <password> [options]
+linkedin-extractor <profile> --email <email> --password <password> [options]
 ```
 
 **Arguments:**
@@ -67,7 +78,7 @@ python linkedin_skill_scraper.py <profile> --email <email> --password <password>
 **Example:**
 
 ```bash
-python linkedin_skill_scraper.py kristian-julsgaard \
+linkedin-extractor kristian-julsgaard \
   --email your_email@example.com \
   --password your_password \
   --headless \
@@ -80,10 +91,10 @@ python linkedin_skill_scraper.py kristian-julsgaard \
 #### Basic Example
 
 ```python
-from linkedin_skill_scraper import LinkedInSkillScraper
+from linkedin_extractor import LinkedInExtractor
 
 # Initialize scraper
-scraper = LinkedInSkillScraper(headless=False, debug=False)
+scraper = LinkedInExtractor(headless=False, debug=False)
 
 try:
     # Setup and login
@@ -108,11 +119,11 @@ finally:
 #### Batch Scraping Multiple Profiles
 
 ```python
-from linkedin_skill_scraper import LinkedInSkillScraper
+from linkedin_extractor import LinkedInExtractor
 import time
 
 profiles = ["profile1", "profile2", "profile3"]
-scraper = LinkedInSkillScraper(headless=True)
+scraper = LinkedInExtractor(headless=True)
 
 try:
     scraper.setup_driver()
@@ -128,28 +139,32 @@ finally:
     scraper.close()
 ```
 
-See the `examples/` directory for more usage patterns.
+#### Using Environment Variables for Credentials
 
-### Parse Saved HTML (No Login Required)
+```python
+import os
+from linkedin_extractor import LinkedInExtractor
 
-If you have saved the HTML of a LinkedIn skills page:
+email = os.getenv('LINKEDIN_EMAIL')
+password = os.getenv('LINKEDIN_PASSWORD')
 
+scraper = LinkedInExtractor()
+try:
+    scraper.setup_driver()
+    scraper.login(email, password)
+    skills = scraper.scrape_skills("profile-username")
+    scraper.save_skills(skills, "skills.txt")
+finally:
+    scraper.close()
+```
+
+Set environment variables:
 ```bash
-python scrape_from_html.py skills_page.html
+export LINKEDIN_EMAIL="your_email@example.com"
+export LINKEDIN_PASSWORD="your_password"
 ```
 
 ## How It Works
-
-### Smart Dynamic Loading
-
-Unlike traditional scrapers that use fixed delays, this scraper:
-
-1. **Monitors Content Loading** - Actively counts skill elements as they appear
-2. **Detects Stability** - Waits until no new skills load for several checks
-3. **Intelligent Scrolling** - Only scrolls when new content is detected
-4. **Adaptive Timing** - Moves quickly when content loads fast, waits longer when slow
-
-This makes it more reliable with LinkedIn's variable page load times and throttling.
 
 ### HTML Structure
 
@@ -157,12 +172,12 @@ The scraper identifies skills by finding `<li>` elements with IDs containing `pr
 
 ## API Reference
 
-### LinkedInSkillScraper Class
+### LinkedInExtractor Class
 
 #### Constructor
 
 ```python
-LinkedInSkillScraper(headless=False, debug=False)
+LinkedInExtractor(headless=False, debug=False)
 ```
 
 **Parameters:**
@@ -172,7 +187,7 @@ LinkedInSkillScraper(headless=False, debug=False)
 #### Methods
 
 **`setup_driver()`**
-- Sets up Chrome WebDriver
+- Sets up Chrome WebDriver with anti-detection measures
 
 **`login(email, password)`**
 - Login to LinkedIn
@@ -192,37 +207,16 @@ LinkedInSkillScraper(headless=False, debug=False)
 **`close()`**
 - Closes the browser (always call in finally block)
 
-## Configuration
-
-### Using Environment Variables
-
-For security, use environment variables instead of hardcoding credentials:
-
-```python
-import os
-from linkedin_skill_scraper import LinkedInSkillScraper
-
-email = os.getenv('LINKEDIN_EMAIL')
-password = os.getenv('LINKEDIN_PASSWORD')
-
-scraper = LinkedInSkillScraper()
-scraper.setup_driver()
-scraper.login(email, password)
-```
-
-Set variables:
-```bash
-export LINKEDIN_EMAIL="your_email@example.com"
-export LINKEDIN_PASSWORD="your_password"
-```
-
 ## Requirements
 
-- Python 3.7+
+- Python 3.8+
 - Chrome browser
 - LinkedIn account
 
-See `requirements.txt` for Python dependencies.
+Python dependencies (installed automatically):
+- `selenium>=4.0.0`
+- `beautifulsoup4>=4.9.0`
+- `webdriver-manager>=3.8.0`
 
 ## Output Format
 
@@ -242,7 +236,7 @@ Data Analysis
 - Only scrape public profiles or those you have permission to access
 - Add delays between requests (use `time.sleep()` in batch operations)
 - Respect LinkedIn's rate limits
-- Consider using the HTML parsing method for personal/educational use
+- This tool is for educational and personal use only
 
 ⚠️ **Rate Limiting**: LinkedIn may throttle or block repeated automated requests. The scraper includes:
 - User-agent spoofing
@@ -266,34 +260,13 @@ Data Analysis
 
 ### Login fails
 - Verify credentials are correct
-- LinkedIn may require 2FA or CAPTCHA (run in non-headless mode to complete)
+- LinkedIn may require 2FA or CAPTCHA (run in non-headless mode to complete manually)
 - Try logging in manually in the browser first
 
 ### Skills load slowly or incompletely
 - The dynamic waiting should handle this automatically
 - If issues persist, check your internet connection
 - LinkedIn may be throttling - add longer delays
-
-## Development
-
-### Running Tests
-
-```bash
-# Install dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest tests/
-```
-
-### Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
 
 ## License
 
@@ -305,10 +278,9 @@ This tool is for educational purposes only. The authors are not responsible for 
 
 ## Changelog
 
-### v1.0.0 (2025-10-07)
-- Initial release
-- Dynamic content loading detection
-- CLI and programmatic interfaces
-- Proper logging
-- Batch scraping support
-- HTML parsing mode
+### v0.1.4 (Current)
+- Improved scrolling and content detection
+- Reduced wait times for faster scraping
+- Better support for single-character skills (e.g., "C", "R")
+- Enhanced anti-detection measures
+- Fixed ChromeDriver path issues
