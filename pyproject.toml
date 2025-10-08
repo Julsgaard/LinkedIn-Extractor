@@ -1,10 +1,10 @@
 [project]
 name = "linkedin-extractor"
-version = "0.1.1"
+version = "0.1.2"
 description = "A LinkedIn data extraction toolkit for scraping skills, experience and more."
 readme = "README.md"
 authors = [{ name = "Kristian Julsgaard" }]
-license = { text = "MIT" }
+license = "MIT"
 requires-python = ">=3.8"
 
 dependencies = [
@@ -15,8 +15,6 @@ dependencies = [
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-
-[tool.setuptools.py-modules]
 py-modules = ["linkedin_extractor"]
 
 [project.scripts]

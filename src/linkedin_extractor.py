@@ -24,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class LinkedInSkillScraper:
+class LinkedInExtractor:
     def __init__(self, headless=False, debug=False):
         """
         Initialize the LinkedIn skill scraper.
