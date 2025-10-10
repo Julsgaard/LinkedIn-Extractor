@@ -1,9 +1,11 @@
 [project]
 name = "linkedin-extractor"
-version = "0.1.5"
+version = "0.1.6"
 description = "A LinkedIn data extraction toolkit for scraping skills, experience and more."
 readme = "README_PYPI.md"
-authors = [{ name = "Kristian Julsgaard" }]
+authors = [{ name = "Kristian Julsgaard" },
+{ name = "Kristian Nyborg Jespersen" }
+]
 license = "MIT"
 requires-python = ">=3.8"
 
