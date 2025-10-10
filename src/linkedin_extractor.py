@@ -36,6 +36,10 @@ class LinkedInExtractor:
         self.driver = None
         self.headless = headless
 
+        # Create debug output directory
+        self.debug_output_dir = os.path.join(os.getcwd(), 'linkedin_debug')
+        os.makedirs(self.debug_output_dir, exist_ok=True)
+
         if debug:
             logger.setLevel(logging.DEBUG)
 
@@ -47,6 +51,8 @@ class LinkedInExtractor:
         if self.headless:
             chrome_options.add_argument('--headless')
             logger.info("Running in headless mode")
+        else:
+            logger.info("Running in GUI mode (visible browser)")
 
         # Essential options for Docker/headless environments
         chrome_options.add_argument('--no-sandbox')
@@ -73,6 +79,334 @@ class LinkedInExtractor:
             options=chrome_options
         )
         logger.info("WebDriver setup complete")
+        logger.debug(f"Browser window size: {self.driver.get_window_size()}")
+
+    def _save_debug_screenshot(self, filename_prefix="debug"):
+        """Save a screenshot for debugging purposes."""
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            screenshot_filename = f"{filename_prefix}_{timestamp}.png"
+            screenshot_path = os.path.join(self.debug_output_dir, screenshot_filename)
+            self.driver.save_screenshot(screenshot_path)
+            logger.info(f"Screenshot saved to: {screenshot_path}")
+            return screenshot_path
+        except Exception as e:
+            logger.error(f"Failed to save screenshot: {e}")
+            return None
+
+    def _save_page_source(self, filename_prefix="debug"):
+        """Save the page source HTML for debugging."""
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            html_filename = f"{filename_prefix}_{timestamp}.html"
+            html_path = os.path.join(self.debug_output_dir, html_filename)
+            with open(html_path, 'w', encoding='utf-8') as f:
+                f.write(self.driver.page_source)
+            logger.info(f"Page source saved to: {html_path}")
+            return html_path
+        except Exception as e:
+            logger.error(f"Failed to save page source: {e}")
+            return None
+
+    def _check_for_login_challenges(self):
+        """
+        Check for various LinkedIn authentication challenges with detailed type detection.
+
+        Returns:
+            tuple: (challenge_type, message) or (None, None) if no challenge detected
+        """
+        try:
+            current_url = self.driver.current_url
+            page_source = self.driver.page_source.lower()
+
+            logger.debug(f"Checking for challenges on URL: {current_url}")
+
+            # FIRST: Check if we're already successfully logged in
+            # This prevents false positives from reCAPTCHA iframes that may exist on LinkedIn pages
+            if ('feed' in current_url or
+                'mynetwork' in current_url or
+                '/in/' in current_url or
+                '/detail/' in current_url or
+                'linkedin.com/learning' in current_url or
+                'linkedin.com/jobs' in current_url or
+                'linkedin.com/messaging' in current_url or
+                'linkedin.com/notifications' in current_url):
+                logger.info(f"Already on a logged-in page (URL: {current_url}) - no challenge detected")
+                return (None, None)
+
+            # Also check for common logged-in page elements
+            try:
+                logged_in_indicators = self.driver.find_elements(
+                    By.CSS_SELECTOR,
+                    '[data-control-name="identity_welcome_message"], .global-nav, .feed-identity-module, nav.global-nav, .authentication-outlet'
+                )
+                if logged_in_indicators:
+                    logger.info(f"Logged-in page elements detected ({len(logged_in_indicators)} indicators found) - no challenge detected")
+                    return (None, None)
+            except:
+                pass
+
+            # Check if we're NOT on a login/challenge page (inverse check)
+            if not any(keyword in current_url for keyword in ['login', 'checkpoint', 'challenge', 'uas/login']):
+                logger.info(f"Not on a login/challenge page (URL: {current_url}) - assuming successful login")
+                return (None, None)
+
+            # Get all visible text from the page for comprehensive checking
+            try:
+                visible_text = self.driver.find_element(By.TAG_NAME, 'body').text.lower()
+                logger.info(f"Page visible text (first 500 chars): {visible_text[:500]}")
+            except:
+                visible_text = ""
+                logger.warning("Could not retrieve page visible text")
+
+            # SECOND: Check for error messages (like incorrect password)
+            # This should be checked before CAPTCHA because LinkedIn often shows both
+            error_selectors = [
+                '.form__label--error',
+                '[role="alert"]',
+                '.alert',
+                '.error-message',
+                '[id*="error"]',
+                '.artdeco-inline-feedback--error',
+                '.form__input--error',
+                'div[data-test-form-element-error]',
+                '.error',
+                'span.error',
+                'p.error'
+            ]
+
+            for selector in error_selectors:
+                elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                for elem in elements:
+                    try:
+                        text = elem.text.strip()
+                        if text and len(text) > 0:
+                            logger.warning(f"Error message found with selector '{selector}': {text}")
+
+                            # Categorize the error
+                            text_lower = text.lower()
+                            if 'password' in text_lower and ('incorrect' in text_lower or 'wrong' in text_lower or "couldn't" in text_lower or "not recognize" in text_lower or "doesn't match" in text_lower):
+                                return ("INCORRECT_PASSWORD", f"Incorrect password: {text}")
+                            elif ('email' in text_lower or 'username' in text_lower) and ('incorrect' in text_lower or 'wrong' in text_lower or 'invalid' in text_lower or "couldn't find" in text_lower or "not found" in text_lower):
+                                return ("INVALID_EMAIL", f"Invalid email/username: {text}")
+                            elif 'try again' in text_lower or 'please try again' in text_lower:
+                                return ("LOGIN_ATTEMPT_ERROR", f"Login attempt failed: {text}")
+                            elif any(keyword in text_lower for keyword in ['error', 'failed', 'unable', 'could not']):
+                                # Generic error, but still prioritize over CAPTCHA
+                                return ("LOGIN_ERROR", f"Login error: {text}")
+                    except:
+                        continue
+
+            # Also check the visible text for common LinkedIn error messages
+            if visible_text:
+                error_phrases = [
+                    ("hmm, that's not the right password", "INCORRECT_PASSWORD", "Incorrect password. Please check your password and try again."),
+                    ("that's not the right password", "INCORRECT_PASSWORD", "Incorrect password. Please check your password and try again."),
+                    ("the password you provided doesn't match", "INCORRECT_PASSWORD", "Incorrect password. The password doesn't match our records."),
+                    ("couldn't find a linkedin account", "INVALID_EMAIL", "Invalid email. No LinkedIn account found with this email address."),
+                    ("we don't recognize that email", "INVALID_EMAIL", "Invalid email. LinkedIn doesn't recognize this email address."),
+                    ("that email address isn't registered", "INVALID_EMAIL", "Invalid email. This email address is not registered with LinkedIn."),
+                    ("incorrect email or password", "INCORRECT_PASSWORD", "Incorrect email or password. Please check your credentials."),
+                    ("wrong email or password", "INCORRECT_PASSWORD", "Incorrect email or password. Please check your credentials."),
+                    ("please check your username", "INVALID_EMAIL", "Invalid username. Please verify your email address."),
+                    ("we couldn't find an account", "INVALID_EMAIL", "Account not found. Please check your email address."),
+                ]
+
+                for phrase, error_type, message in error_phrases:
+                    if phrase in visible_text:
+                        logger.warning(f"Detected error phrase in page text: '{phrase}'")
+                        return (error_type, message)
+
+            # Check for phone verification
+            phone_verification_indicators = [
+                'input[id*="phone"]',
+                'input[name*="phone"]',
+                '[id*="phoneNumber"]',
+                '[name*="phoneNumber"]'
+            ]
+
+            for selector in phone_verification_indicators:
+                elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    # Check if it's asking for phone number input
+                    if any(keyword in visible_text for keyword in ['phone', 'mobile', 'verification code', 'enter code']):
+                        logger.warning(f"Phone verification detected using selector: {selector}")
+                        logger.info(f"Page contains text: {visible_text[:200]}...")
+                        return ("PHONE_VERIFICATION",
+                               "Phone verification required. LinkedIn is asking for a code sent to your phone. "
+                               "This usually happens when logging in from a new location or suspicious activity is detected.")
+
+            # Check for email verification
+            email_verification_indicators = [
+                'input[id*="email-pin"]',
+                'input[name*="email"]',
+                '[id*="email-verification"]'
+            ]
+
+            for selector in email_verification_indicators:
+                elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    if 'email' in visible_text and any(keyword in visible_text for keyword in ['code', 'verification', 'pin']):
+                        logger.warning(f"Email verification detected using selector: {selector}")
+                        logger.info(f"Page contains text: {visible_text[:200]}...")
+                        return ("EMAIL_VERIFICATION",
+                               "Email verification required. LinkedIn sent a verification code to your email address. "
+                               "Please check your email and note that automated scraping cannot complete this step.")
+
+            # Check for reCAPTCHA (Google) - but only if no error message was found AND we're still on login page
+            recaptcha_selectors = [
+                'iframe[title*="recaptcha"]',
+                'iframe[src*="recaptcha"]',
+                '.g-recaptcha',
+                '#g-recaptcha',
+                '[class*="recaptcha"]'
+            ]
+
+            for selector in recaptcha_selectors:
+                elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    # Check if the reCAPTCHA iframe is actually visible (not hidden)
+                    try:
+                        is_visible = elements[0].is_displayed()
+                        if not is_visible:
+                            logger.info(f"reCAPTCHA iframe found but not visible - ignoring")
+                            continue
+                    except:
+                        # If we can't determine visibility, check other factors
+                        pass
+
+                    logger.warning(f"Google reCAPTCHA detected using selector: {selector}")
+                    logger.info(f"reCAPTCHA iframe found: {elements[0].get_attribute('src') if elements[0].get_attribute('src') else 'N/A'}")
+
+                    # Check if this is JUST a CAPTCHA or if there's an underlying error
+                    # If we see password-related text, prioritize that
+                    password_keywords = ['password', 'incorrect', 'wrong', "couldn't", "not recognize", "doesn't match", "not the right"]
+                    if any(keyword in visible_text for keyword in password_keywords):
+                        logger.warning("CAPTCHA present but password error text detected - treating as password error")
+                        return ("INCORRECT_PASSWORD",
+                               "Incorrect password detected. LinkedIn is also showing a CAPTCHA challenge. "
+                               "Please verify your password is correct and try again later when the CAPTCHA requirement may be lifted.")
+
+                    return ("RECAPTCHA",
+                           "Google reCAPTCHA detected. LinkedIn is using an image/puzzle CAPTCHA to verify you're human. "
+                           "This cannot be solved automatically. This may indicate incorrect credentials or suspicious activity. "
+                           "Try logging in manually through a browser first or wait before retrying.")
+
+            # Check for generic CAPTCHA
+            captcha_selectors = [
+                '[id*="captcha"]',
+                '[class*="captcha"]',
+                'img[alt*="captcha"]',
+                'img[src*="captcha"]'
+            ]
+
+            for selector in captcha_selectors:
+                elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    logger.warning(f"Generic CAPTCHA detected using selector: {selector}")
+                    element_info = elements[0].get_attribute('outerHTML')[:200]
+                    logger.debug(f"CAPTCHA element: {element_info}...")
+                    return ("CAPTCHA_PUZZLE",
+                           "CAPTCHA puzzle detected. LinkedIn is requiring an image/text CAPTCHA challenge. "
+                           "This typically happens when automated activity is detected or credentials are incorrect.")
+
+            # Check for 2FA / PIN verification
+            verification_selectors = [
+                'input[id*="verification"]',
+                'input[name*="pin"]',
+                'input[id*="pin-verification"]',
+                'input[type="tel"]',
+                '[data-id*="verification"]',
+                '[aria-label*="verification"]'
+            ]
+
+            for selector in verification_selectors:
+                elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    logger.warning(f"2FA/PIN verification detected using selector: {selector}")
+                    element_attrs = elements[0].get_attribute('outerHTML')[:200]
+                    logger.debug(f"Verification element: {element_attrs}...")
+
+                    # Try to determine what kind of verification
+                    logger.info(f"Verification page text sample: {visible_text[:300]}...")
+
+                    if 'authenticator' in visible_text or 'authentication app' in visible_text:
+                        return ("AUTHENTICATOR_APP",
+                               "Authenticator app verification required. LinkedIn is asking for a code from your authentication app "
+                               "(like Google Authenticator or Microsoft Authenticator). Automated scraping cannot complete this.")
+                    elif 'text' in visible_text or 'sms' in visible_text:
+                        return ("SMS_VERIFICATION",
+                               "SMS verification required. LinkedIn sent a code via text message to your phone. "
+                               "Automated scraping cannot complete this step.")
+                    else:
+                        return ("TWO_FACTOR_AUTH",
+                               "Two-factor authentication required. LinkedIn is asking for an additional verification code. "
+                               "This security feature prevents automated access.")
+
+            # Check for security challenge/checkpoint
+            if 'checkpoint/challenge' in current_url or 'uas/challenge' in current_url:
+                logger.warning(f"Security checkpoint detected in URL: {current_url}")
+
+                # Try to get more details from the page
+                try:
+                    page_text = self.driver.find_element(By.TAG_NAME, 'body').text
+                    logger.info(f"Security challenge page text: {page_text[:500]}...")
+
+                    if 'unusual activity' in page_text.lower():
+                        return ("UNUSUAL_ACTIVITY_CHECKPOINT",
+                               "LinkedIn security checkpoint: Unusual activity detected. "
+                               "LinkedIn has flagged suspicious behavior on this account. You may need to verify your identity manually.")
+                    elif 'verify' in page_text.lower():
+                        return ("VERIFICATION_CHECKPOINT",
+                               "LinkedIn verification checkpoint: Account verification required. "
+                               "LinkedIn is asking you to verify your account through additional steps.")
+                except:
+                    pass
+
+                return ("SECURITY_CHECKPOINT",
+                       "LinkedIn security checkpoint encountered. This is a manual verification page that requires human interaction.")
+
+            # Check if still on login page (important for catching silent failures)
+            if 'linkedin.com/login' in current_url or 'linkedin.com/uas/login' in current_url:
+                logger.warning(f"Still on login page after attempt: {current_url}")
+
+                # Try to find the password/email input fields to confirm we're on the login form
+                try:
+                    password_field = self.driver.find_elements(By.ID, 'password')
+                    email_field = self.driver.find_elements(By.ID, 'username')
+
+                    if password_field and email_field:
+                        logger.warning("Login form still present - login likely failed")
+
+                        # Check page text more thoroughly for credential errors
+                        body_text = self.driver.find_element(By.TAG_NAME, 'body').text.lower()
+                        logger.info(f"Login page body text: {body_text[:300]}...")
+
+                        if any(keyword in body_text for keyword in ['incorrect', 'wrong', 'invalid', "couldn't find", "doesn't match", "not recognize"]):
+                            if 'password' in body_text:
+                                return ("INCORRECT_PASSWORD",
+                                       "Incorrect password. Please verify your LinkedIn password and try again.")
+                            elif 'email' in body_text or 'username' in body_text:
+                                return ("INVALID_EMAIL",
+                                       "Invalid email address. Please verify your LinkedIn email and try again.")
+                            else:
+                                return ("CREDENTIALS_REJECTED",
+                                       "Login credentials were rejected. Please verify your LinkedIn email and password are correct.")
+                        else:
+                            return ("STILL_ON_LOGIN",
+                                   "Login failed - still on login page. This could indicate incorrect credentials, rate limiting, or network issues. "
+                                   "Please verify your credentials are correct and try again later.")
+                except Exception as e:
+                    logger.debug(f"Error checking login form presence: {e}")
+
+                return ("STILL_ON_LOGIN",
+                       "Still on login page after login attempt. This could indicate incorrect credentials or a silent failure.")
+
+            return (None, None)
+
+        except Exception as e:
+            logger.error(f"Error checking for login challenges: {e}", exc_info=True)
+            return (None, None)
 
     def login(self, email, password):
         """
@@ -85,32 +419,102 @@ class LinkedInExtractor:
         Raises:
             Exception: If login fails
         """
-        logger.info("Logging in to LinkedIn...")
-        self.driver.get('https://www.linkedin.com/login')
+        logger.info("=" * 60)
+        logger.info("Starting LinkedIn login process")
+        logger.info("=" * 60)
 
         try:
+            logger.info("Navigating to LinkedIn login page...")
+            self.driver.get('https://www.linkedin.com/login')
+            logger.debug(f"Current URL: {self.driver.current_url}")
+            logger.debug(f"Page title: {self.driver.title}")
+
             # Wait for login form
+            logger.info("Waiting for login form to load...")
             email_field = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.ID, 'username'))
             )
+            logger.info("✓ Email field found")
+
             password_field = self.driver.find_element(By.ID, 'password')
+            logger.info("✓ Password field found")
 
             # Enter credentials
+            logger.info(f"Entering email: {email[:3]}***@{email.split('@')[1] if '@' in email else '***'}")
+            email_field.clear()
             email_field.send_keys(email)
+
+            logger.info("Entering password: ***")
+            password_field.clear()
             password_field.send_keys(password)
 
             # Click login button
+            logger.info("Looking for login button...")
             login_button = self.driver.find_element(By.CSS_SELECTOR, 'button[type="submit"]')
+            logger.info("✓ Login button found")
+            logger.debug(f"Login button text: {login_button.text}")
+
+            logger.info("Clicking login button...")
             login_button.click()
 
+            # Wait a moment for the page to start loading
+            time.sleep(2)
+            logger.debug(f"URL after login attempt: {self.driver.current_url}")
+
+            # Check for immediate challenges
+            challenge_type, challenge_msg = self._check_for_login_challenges()
+            if challenge_type:
+                logger.error(f"Login challenge detected: {challenge_type}")
+                logger.error(f"Message: {challenge_msg}")
+                self._save_debug_screenshot(f"login_challenge_{challenge_type}")
+                self._save_page_source(f"login_challenge_{challenge_type}")
+                raise Exception(f"{challenge_type}: {challenge_msg}")
+
             # Wait for login to complete by checking for feed or profile
-            WebDriverWait(self.driver, 10).until(
-                lambda driver: 'feed' in driver.current_url or 'mynetwork' in driver.current_url or driver.find_elements(By.CSS_SELECTOR, '[data-control-name="identity_welcome_message"]')
-            )
-            logger.info("Login successful!")
+            logger.info("Waiting for login to complete...")
+            logger.info("Looking for indicators: feed URL, mynetwork URL, or welcome message...")
+
+            try:
+                WebDriverWait(self.driver, 15).until(
+                    lambda driver: 'feed' in driver.current_url or
+                                   'mynetwork' in driver.current_url or
+                                   driver.find_elements(By.CSS_SELECTOR, '[data-control-name="identity_welcome_message"]')
+                )
+                logger.info("=" * 60)
+                logger.info("✓ Login successful!")
+                logger.info("=" * 60)
+                logger.debug(f"Final URL: {self.driver.current_url}")
+                logger.debug(f"Page title: {self.driver.title}")
+
+            except Exception as wait_error:
+                logger.error("Login verification timed out")
+                logger.debug(f"Current URL: {self.driver.current_url}")
+                logger.debug(f"Page title: {self.driver.title}")
+
+                # Check again for challenges
+                challenge_type, challenge_msg = self._check_for_login_challenges()
+                if challenge_type:
+                    logger.error(f"Post-login challenge detected: {challenge_type}")
+                    self._save_debug_screenshot(f"login_timeout_{challenge_type}")
+                    self._save_page_source(f"login_timeout_{challenge_type}")
+                    raise Exception(f"{challenge_type}: {challenge_msg}")
+                else:
+                    self._save_debug_screenshot("login_timeout")
+                    self._save_page_source("login_timeout")
+                    raise Exception(f"Login verification timeout. Unable to confirm successful login. URL: {self.driver.current_url}")
 
         except Exception as e:
+            logger.error("=" * 60)
             logger.error(f"Login failed: {e}")
+            logger.error("=" * 60)
+            logger.debug(f"Exception type: {type(e).__name__}")
+
+            # Save debug information
+            if self.driver:
+                logger.info("Saving debug information...")
+                self._save_debug_screenshot("login_failed")
+                self._save_page_source("login_failed")
+
             raise
 
     def _count_skill_elements(self):
@@ -239,7 +643,7 @@ class LinkedInExtractor:
             if new_count > last_count:
                 logger.info(f"New skills loaded: {new_count} (was {last_count})")
                 last_count = new_count
-                stable_scrolls = 0  # Reset counter
+                stable_scrolls = 0 # Reset counter
             else:
                 logger.debug(f"No new skills (still {new_count})")
                 stable_scrolls += 1
@@ -383,7 +787,7 @@ def main():
         return
 
     # Initialize scraper
-    scraper = LinkedInSkillScraper(headless=headless, debug=args.debug if hasattr(args, 'debug') else False)
+    scraper = LinkedInExtractor(headless=headless, debug=args.debug if hasattr(args, 'debug') else False)
 
     try:
         # Setup driver
